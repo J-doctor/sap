@@ -1,0 +1,870 @@
+﻿* Servicerückmeldung anlegen
+  if is_cats_accountassign-tasktype = 'VT'.
+    perform create_conf using    is_cats_accountassign
+                                 l_pernr
+                        changing et_message
+                                 lv_return.
+
+    if lv_return is not initial.
+      e_return = '1'.
+    endif.
+
+    return.
+*  else.
+*    DATA(LV_NVT) = 'X'.
+  endif.
+
+
+*&---------------------------------------------------------------------*
+*& Form create_conf
+*&---------------------------------------------------------------------*
+*& Servicerückmeldung anlegen
+*&---------------------------------------------------------------------*
+FORM create_conf  USING    ps_cats_accountassign TYPE zmtt3_accountassign_kopf_s
+                           pv_partner            TYPE pernr_d
+                  CHANGING pt_mess               TYPE bapiret2_t
+                           pv_return             TYPE xfeld.
+  DATA: lv_header_handle      TYPE crmt_handle,
+        ls_adminh             TYPE crmd_orderadm_h,
+        ls_orderadm_h_out     TYPE crmt_orderadm_h_com,
+        lt_orderadm_h_out     TYPE crmt_orderadm_h_comt,
+        lt_orderadm_i_out     TYPE crmt_orderadm_i_comt,
+        lt_orderadminh_fnames TYPE crmt_input_field_names_tab,
+        lt_orderadmini_fnames TYPE crmt_input_field_names_tab,
+        lt_schedlini_fnames   TYPE crmt_input_field_names_tab,
+        lt_servicei_fnames    TYPE crmt_input_field_names_tab,
+        lt_partner_fnames     TYPE crmt_input_field_names_tab,
+        lt_input_fields       TYPE crmt_input_field_tab,
+        lt_schedlin_i_out     TYPE crmt_schedlin_i_comt,
+        lt_service_i_out      TYPE crmt_service_i_comt,
+        lt_doc_flow           TYPE crmt_doc_flow_comt,
+        lt_exception          TYPE crmt_exception_t                   ##NEEDED,       "debug
+        lt_partner            TYPE crmt_partner_comt.
+
+  DATA: lt_guid_to_save TYPE crmt_object_guid_tab,
+        lt_not_saved    TYPE crmt_object_guid_tab.
+
+  DATA: lt_serv_i_up  TYPE gty_serv_i_tab,
+        lt_serv_i_ueb TYPE gty_serv_i_tab,
+        ls_serv_i     TYPE gty_serv_i.
+
+  DATA: ls_crm_jest TYPE crm_jest,
+        ls_mess     TYPE bapiret2.
+
+  FIELD-SYMBOLS: <fs_guid>      TYPE crmt_object_guid.
+
+* Voraussetzungen für Rückmeldung überprüfen
+  PERFORM check_pre_cond USING    ps_cats_accountassign
+                         CHANGING ls_adminh
+                                  lt_serv_i_up
+                                  ls_crm_jest
+                                  pt_mess
+                                  pv_return.
+
+  exec_return.
+
+* Arbeitszeitposition bestimmen
+  PERFORM det_wt_position  USING    ps_cats_accountassign
+                                    ls_crm_jest
+                                    pv_partner
+                           CHANGING lt_serv_i_up
+                                    ls_serv_i
+                                    pt_mess
+                                    pv_return.
+
+  exec_return.
+
+* Auswertung der Komponententabelle zur Bestimmung der anzulegenden Rückmeldungsposition
+  PERFORM eval_comp_tab USING    ps_cats_accountassign
+                        CHANGING ls_serv_i
+                                 lt_serv_i_ueb.
+
+  exec_return.
+
+* Füllen Übergabeparameter für CRM_ORDER_MAINTAIN beim Anlegen der Serrvicerückmeldung
+
+* Zu füllende felder beim Anlegen der Servicemeldung
+  PERFORM set_input_fields_cre_conf CHANGING lt_orderadminh_fnames
+                                             lt_orderadmini_fnames
+                                             lt_schedlini_fnames
+                                             lt_servicei_fnames
+                                             lt_partner_fnames.
+
+  lv_header_handle = '0000000001'.
+
+* Kopfdaten beim Anlegen der Servicemeldung füllen
+  PERFORM fill_header_data_cre_conf USING    ls_adminh
+                                             lv_header_handle
+                                             pv_partner
+                                             lt_orderadminh_fnames
+                                             lt_partner_fnames
+                                    CHANGING lt_orderadm_h_out
+                                             lt_input_fields
+                                             lt_doc_flow
+                                             lt_partner.
+
+* Positionsdaten beim Anlegen der Servicemeldung füllen
+  PERFORM fill_item_data_cre_conf USING    lt_serv_i_ueb
+                                           lv_header_handle
+                                           lt_orderadmini_fnames
+                                           lt_schedlini_fnames
+                                           lt_servicei_fnames
+                                           pv_partner
+                                  CHANGING lt_orderadm_i_out
+                                           lt_doc_flow
+                                           lt_input_fields
+                                           lt_schedlin_i_out
+                                           lt_service_i_out.
+
+* Rückmeldung anlegen
+  CALL FUNCTION 'CRM_ORDER_MAINTAIN'
+    EXPORTING
+      it_schedlin_i     = lt_schedlin_i_out
+      it_partner        = lt_partner
+      it_service_i      = lt_service_i_out
+    IMPORTING
+      et_exception      = lt_exception
+    CHANGING
+      ct_orderadm_h     = lt_orderadm_h_out
+      ct_orderadm_i     = lt_orderadm_i_out
+      ct_input_fields   = lt_input_fields
+      ct_doc_flow       = lt_doc_flow
+    EXCEPTIONS
+      error_occurred    = 1
+      document_locked   = 2
+      no_change_allowed = 3
+      no_authority      = 4
+      OTHERS            = 5.
+
+  IF sy-subrc <> 0 OR
+     lt_exception IS NOT INITIAL.
+*   Rückmeldung für Auftragsposition &1 &2 konnte nicht angelegt werden
+    write_message_2 e 010.
+
+    RETURN.
+  ELSE.
+    LOOP AT lt_orderadm_i_out TRANSPORTING NO FIELDS
+                              WHERE guid IS INITIAL.
+*     Rückmeldung für Auftragsposition &1 &2 konnte nicht angelegt werden
+      write_message_2 e 010.
+
+      RETURN.
+    ENDLOOP.
+  ENDIF.
+
+* Rückmeldung für Auftragsposition &1 &2 wurde angelegt
+  write_message_2 s 011.
+
+  READ TABLE lt_orderadm_h_out INTO ls_orderadm_h_out INDEX 1.
+  INSERT ls_orderadm_h_out-guid INTO TABLE lt_guid_to_save.
+
+* Angelegte Daten sichern
+  CALL FUNCTION 'CRM_ORDER_SAVE'
+    EXPORTING
+      it_objects_to_save   = lt_guid_to_save
+    IMPORTING
+      et_objects_not_saved = lt_not_saved
+    EXCEPTIONS
+      document_not_saved   = 1
+      OTHERS               = 2.
+
+  IF sy-subrc IS NOT INITIAL.
+    LOOP AT lt_not_saved ASSIGNING <fs_guid>.
+*     Rückmeldung für Auftragsposition &1 &2 konnte nicht gesichert werden
+      write_message_2 e 012.
+    ENDLOOP.
+  ENDIF.
+
+  COMMIT WORK AND WAIT.
+
+  CALL FUNCTION 'CRM_ORDER_INIT_OW'
+    EXPORTING
+      iv_initialize_whole_buffer = 'X'
+    EXCEPTIONS
+      error_occurred             = 1
+      bad_performance            = 2
+      OTHERS                     = 3.
+
+
+  IF sy-subrc <> 0.
+*    Implement suitable error handling here
+  ENDIF.
+
+  CALL FUNCTION 'CRM_STATUS_BUFFER_REFRESH'.
+
+* Rückmeldungsstatus auf erledigt setzen
+* Rückmeldung anlegen und Status sofort auf erledigt setzen geht zwar,
+* aber die Folgeverarbeitung (anlegen des Catsdb-Satzes) wurde nicht durchgeführt,
+* eventuell braucht es dafür bereits die guid??????
+  PERFORM set_status_conf USING    lt_orderadm_h_out
+                          CHANGING pt_mess
+                                   pv_return.
+ENDFORM.
+
+
+*&---------------------------------------------------------------------*
+*& Form check_pre_cond
+*&---------------------------------------------------------------------*
+*& Voraussetzungen für Rückmeldung überprüfen
+*&---------------------------------------------------------------------*
+FORM check_pre_cond  USING    ps_cats_accountassign TYPE zmtt3_accountassign_kopf_s
+                     CHANGING ps_adminh             TYPE crmd_orderadm_h
+                              pt_serv_i_up          TYPE gty_serv_i_tab
+                              ps_crm_jest           TYPE crm_jest
+                              pt_mess               TYPE bapiret2_t
+                              pv_return             TYPE xfeld.
+  DATA: ls_mess TYPE bapiret2.
+
+  IF ps_cats_accountassign-comp_tab IS INITIAL.
+*   Keine rückzumeldenden Komponenteb vorhanden
+    write_message_0 e 003.
+
+    RETURN.
+  ENDIF.
+
+*---------------------------- Anfang #SB20230519 ----------------------------------
+  "Komponenten für die Rechnung entfernen -> TimeTravel: Offene Punkte
+  DATA: lv_menge    TYPE catsnumber,
+        lv_taskcomp TYPE catstaskcomponent.
+
+  LOOP AT ps_cats_accountassign-comp_tab ASSIGNING FIELD-SYMBOL(<ls_cats_account>).
+    DATA(lv_count) = strlen( <ls_cats_account>-taskcomponent ) - 1.
+
+    IF <ls_cats_account>-taskcomponent+lv_count(1) = 'R'.
+      lv_taskcomp = <ls_cats_account>-taskcomponent(lv_count).
+      lv_menge    = <ls_cats_account>-catsquantity.
+
+      DELETE ps_cats_accountassign-comp_tab  INDEX sy-tabix.
+      CONTINUE.
+    ENDIF.
+
+    IF <ls_cats_account>-taskcomponent = lv_taskcomp.
+      <ls_cats_account>-catsquantity = lv_menge.
+      CLEAR lv_menge.
+    ENDIF.
+
+  ENDLOOP.
+*---------------------------- Ende #SB20230519 ----------------------------------
+
+  SELECT SINGLE header_guid   AS guid
+                object_id     AS object_id
+                objtype_h     AS object_type
+                description_h AS description
+                FROM crms4d_serv_h
+                INTO CORRESPONDING FIELDS OF ps_adminh
+                WHERE object_id = ps_cats_accountassign-rkdauf      ##WARN_OK.
+
+  IF sy-subrc <> 0.
+*   Serviceauftrag &1 nicht gefunden
+    write_message_1 e 001.
+
+    RETURN.
+  ENDIF.
+
+  SELECT object_id
+         number_int
+         item_guid
+         objtype_i
+         description_i
+         ordered_prod
+         itm_type
+         service_type
+         valuation_type
+         parent
+         order_qty
+*         base_qty_unit
+         FROM crms4d_serv_i
+         INTO CORRESPONDING FIELDS OF TABLE pt_serv_i_up
+         WHERE object_id  = ps_cats_accountassign-rkdauf
+           AND number_int = ps_cats_accountassign-rkdpos            ##TOO_MANY_ITAB_FIELDS.
+
+  IF sy-subrc <> 0.
+*   Serviceauftragsposition &1 &2 nicht gefunden
+    write_message_2 e 002.
+
+    RETURN.
+  ENDIF.
+
+* I1004 freigegeben
+  SELECT SINGLE * FROM crm_jest INTO ps_crm_jest
+                  WHERE objnr = ps_adminh-guid
+                    AND stat = 'I1004'             "freigegeben
+                    AND inact = space.
+
+  IF sy-subrc <> 0.
+*   Zu Auftrag &1 kann aufgrund des Status keine Rückmeldung erfasst werden
+    write_message_1 e 013.
+
+    RETURN.
+  ENDIF.
+ENDFORM.
+
+
+*&---------------------------------------------------------------------*
+*& Form det_wt_position
+*&---------------------------------------------------------------------*
+*& Arbeitszeitposition bestimmen
+*&---------------------------------------------------------------------*
+FORM det_wt_position  USING    ps_cats_accountassign TYPE zmtt3_accountassign_kopf_s
+                               ps_crm_jest           TYPE crm_jest
+                               pv_partner            TYPE pernr_d
+                      CHANGING pt_serv_i_up          TYPE gty_serv_i_tab
+                               ps_serv_i             TYPE gty_serv_i
+                               pt_mess               TYPE bapiret2_t
+                               pv_return             TYPE xfeld.
+  DATA: lt_serv_i      TYPE gty_serv_i_tab,
+        lt_serv_i_down TYPE gty_serv_i_tab,
+        lt_serv_i_dl   TYPE gty_serv_i_tab.    "Dienstleistungsposition und darunterliegende
+
+  DATA: lv_lines_old TYPE i,
+        lv_count     TYPE i.
+
+  DATA: ls_mess TYPE bapiret2.
+
+  FIELD-SYMBOLS: <fs_serv_i_up> TYPE gty_serv_i.
+
+  lt_serv_i_down = pt_serv_i_up.
+
+  READ TABLE pt_serv_i_up INTO ps_serv_i
+                          INDEX 1.
+  IF sy-subrc = 0.
+    IF ps_serv_i-itm_type = 'ZKT1' OR
+       ps_serv_i-itm_type = 'ZKT2'.
+*     Lesen der Hierarchie nicht notwendig, man hat schon die Position auf die zurückgemedet wird
+      RETURN.
+
+*      lt_serv_i = pt_serv_i_up.
+    ELSE.
+      IF ps_serv_i-itm_type = 'ZDL1' OR
+         ps_serv_i-itm_type = 'ZDL2' OR
+         ps_serv_i-itm_type = 'ZDL3'.
+*       lesen der Hierarchie nach oben nicht notwendig, Arbeitszeitposition muß
+*       unterhalb der Dienstleistungsposition sein
+      ELSE.
+        lv_lines_old = 0.
+
+*       Hierarchie nach oben
+        WHILE lines( pt_serv_i_up ) > lv_lines_old.
+          lv_lines_old = lines( pt_serv_i_up ).
+
+          SELECT object_id
+                 number_int
+                 item_guid
+                 objtype_i
+                 description_i
+                 ordered_prod
+                 itm_type
+                 service_type
+                 valuation_type
+                 parent
+                 order_qty
+*                 base_qty_unit
+                 FROM crms4d_serv_i
+                 APPENDING CORRESPONDING FIELDS OF TABLE pt_serv_i_up
+                 FOR ALL ENTRIES IN pt_serv_i_up
+                 WHERE object_id  = ps_cats_accountassign-rkdauf
+                   AND item_guid  = pt_serv_i_up-parent               ##TOO_MANY_ITAB_FIELDS.            "Hierarchie nach oben
+
+          SORT pt_serv_i_up BY item_guid.
+          DELETE ADJACENT DUPLICATES FROM pt_serv_i_up COMPARING item_guid.
+
+          LOOP AT pt_serv_i_up ASSIGNING <fs_serv_i_up>
+                               WHERE itm_type = 'ZDL1'
+                                  OR itm_type = 'ZDL2'
+                                  OR itm_type = 'ZDL3'.
+*           Dienstleistungsposition unter der sich die Arbeitszeitposition
+*           befinden muss auf die zurückgemeldet wird
+*           weiter nach oben muss man nicht
+
+            APPEND <fs_serv_i_up> TO lt_serv_i_dl.
+
+*           Hierarchie nach unten ab übergebener Position
+            PERFORM get_hierarchy_down USING    ps_cats_accountassign-rkdauf
+                                       CHANGING lt_serv_i_dl.
+
+            APPEND LINES OF lt_serv_i_dl TO pt_serv_i_up.
+
+            EXIT.
+          ENDLOOP.
+
+          IF sy-subrc = 0.
+            SORT pt_serv_i_up BY item_guid.
+            DELETE ADJACENT DUPLICATES FROM pt_serv_i_up COMPARING item_guid.
+
+            EXIT.
+          ENDIF.
+        ENDWHILE.
+      ENDIF.
+
+*     Hierarchie nach unten ab übergebener Position
+      PERFORM get_hierarchy_down USING    ps_cats_accountassign-rkdauf
+                                 CHANGING lt_serv_i_down.
+
+      lt_serv_i = pt_serv_i_up.
+      APPEND LINES OF lt_serv_i_down TO lt_serv_i.
+      SORT lt_serv_i BY number_int.
+      DELETE ADJACENT DUPLICATES FROM lt_serv_i COMPARING number_int.
+
+*     Gibt es mehrere Arbeitszeitpositionen?
+      LOOP AT lt_serv_i TRANSPORTING NO FIELDS
+                        WHERE itm_type = 'ZKT1'
+                           OR itm_type = 'ZKT2'.
+        lv_count = lv_count + 1.
+      ENDLOOP.
+
+      IF lv_count > 1.
+*       Arbeitszeitposition für Auftragsposition &1 &2 nicht eindeutig
+        write_message_2 e 004.
+
+        RETURN.
+      ENDIF.
+
+      CLEAR lv_count.
+
+*     Gibt es mehrere Dienstleistungspositionen?
+      LOOP AT lt_serv_i TRANSPORTING NO FIELDS
+                        WHERE itm_type = 'ZDL1'
+                           OR itm_type = 'ZDL2'
+                           OR itm_type = 'ZDL3'.
+        lv_count = lv_count + 1.
+      ENDLOOP.
+
+      IF lv_count > 1.
+*       Dienstleistungsposition für Auftragsposition &1 &2 nicht eindeutig
+        write_message_2 e 008.
+
+        RETURN.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+
+* Bei Bedarf Arbeitszeitposition im Serviceauftrag anlegen
+  PERFORM maintain_service_order USING    ps_cats_accountassign
+                                          ps_crm_jest
+                                          pv_partner
+                                 CHANGING lt_serv_i
+                                          ps_serv_i
+                                          pt_mess
+                                          pv_return.
+
+  exec_return.
+ENDFORM.
+
+
+*&---------------------------------------------------------------------*
+*& Form eval_comp_tab
+*&---------------------------------------------------------------------*
+*& Auswertung der Komponententabelle zur Bestimmung der anzulegenden Rückmeldungsposition
+*&---------------------------------------------------------------------*
+FORM eval_comp_tab  USING    ps_cats_accountassign TYPE zmtt3_accountassign_kopf_s
+                    CHANGING ps_serv_i             TYPE gty_serv_i
+                             pt_serv_i_ueb         TYPE gty_serv_i_tab.
+  DATA: lt_comp      TYPE zmtt3_accountassign_pos_t,
+        lv_task_comp TYPE catstaskcomponent,
+        lv_comp_len  TYPE i.
+
+  FIELD-SYMBOLS: <fs_comp> TYPE zmtt3_accountassign_pos_s.
+
+  lt_comp = ps_cats_accountassign-comp_tab.
+  SORT lt_comp BY taskcomponent.        " _R Komponente hinter Komponente ohne _R aber
+  "z. B. Reihenfolge AZ, AZ1, AZ_R
+
+  LOOP AT lt_comp ASSIGNING <fs_comp>.
+    lv_comp_len = strlen( <fs_comp>-taskcomponent ) - 2.
+    IF <fs_comp>-taskcomponent+lv_comp_len(2) = '_R'.
+*     '_R' Komponente ohne vorhergehende Komponente ohne _R
+      ps_serv_i-service_type = <fs_comp>-taskcomponent(lv_comp_len).
+      ps_serv_i-catshours_r  = <fs_comp>-catshours.
+      ps_serv_i-unit         = <fs_comp>-unit.
+
+*     falls fakturierbare Zeit 0 ist, Übernahme der Gesamtzeit als fakturierbare
+*     Zeit lat Michael Müller. Fakturierbare Zeit = Menge in der Rückmeldungsposition.
+*     darf nicht leer sein, da sonst die Position nicht auf 'erledigt' gesetzt werden kann.
+      IF ps_serv_i-catshours IS INITIAL.
+        ps_serv_i-catshours = ps_serv_i-catshours_r.
+      ENDIF.
+    ELSE.
+      ps_serv_i-service_type = <fs_comp>-taskcomponent.
+      ps_serv_i-catshours    = <fs_comp>-catshours.
+      ps_serv_i-unit         = <fs_comp>-unit.
+
+      lv_task_comp = <fs_comp>-taskcomponent && '_R'.
+      IF line_exists( lt_comp[ taskcomponent = lv_task_comp ] ).
+        ps_serv_i-catshours_r = lt_comp[ taskcomponent = lv_task_comp ]-catshours.
+
+        DELETE lt_comp WHERE taskcomponent = lv_task_comp.
+      ENDIF.
+    ENDIF.
+
+    APPEND ps_serv_i TO pt_serv_i_ueb.
+  ENDLOOP.
+ENDFORM.
+
+
+*&---------------------------------------------------------------------*
+*&      Form  set_input_fields_cre_conf
+*&---------------------------------------------------------------------*
+*& Zu füllende felder beim Anlegen der Servicemeldung
+*&---------------------------------------------------------------------*
+FORM set_input_fields_cre_conf CHANGING pt_orderadminh_fnames TYPE crmt_input_field_names_tab
+                                        pt_orderadmini_fnames TYPE crmt_input_field_names_tab
+                                        pt_schedlini_fnames   TYPE crmt_input_field_names_tab
+                                        pt_servicei_fnames    TYPE crmt_input_field_names_tab
+                                        pt_partner_fnames     TYPE crmt_input_field_names_tab.
+
+  DATA: ls_input_fnames TYPE crmt_input_field_names.
+
+* admin_h
+  ls_input_fnames-fieldname  = 'PROCESS_TYPE'.
+  INSERT ls_input_fnames INTO TABLE pt_orderadminh_fnames.
+  ls_input_fnames-fieldname  = 'MODE'.
+  INSERT ls_input_fnames INTO TABLE pt_orderadminh_fnames.
+  ls_input_fnames-fieldname  = 'DESCRIPTION'.
+  INSERT ls_input_fnames INTO TABLE pt_orderadminh_fnames.
+  ls_input_fnames-fieldname  = 'PREDECESSOR_PROCESS'.
+  INSERT ls_input_fnames INTO TABLE pt_orderadminh_fnames.
+  ls_input_fnames-fieldname  = 'PREDECESSOR_OBJECT_TYPE'.
+  INSERT ls_input_fnames INTO TABLE pt_orderadminh_fnames.
+
+* admin_i
+  ls_input_fnames-fieldname = 'ORDERED_PROD'.
+  INSERT ls_input_fnames INTO TABLE pt_orderadmini_fnames.
+  ls_input_fnames-fieldname = 'MODE'.
+  INSERT ls_input_fnames INTO TABLE pt_orderadmini_fnames.
+  ls_input_fnames-fieldname = 'ITM_TYPE'.
+  INSERT ls_input_fnames INTO TABLE pt_orderadmini_fnames.
+
+* schedline_i
+  ls_input_fnames-fieldname = 'QUANTITY'.
+  INSERT ls_input_fnames INTO TABLE pt_schedlini_fnames.
+  ls_input_fnames-fieldname = 'MODE'.
+  INSERT ls_input_fnames INTO TABLE pt_schedlini_fnames.
+
+* service_i
+  ls_input_fnames-fieldname = 'SRV_CONF_TIME'.
+  INSERT ls_input_fnames INTO TABLE pt_servicei_fnames.
+  ls_input_fnames-fieldname = 'SRV_CONF_TUNIT'.
+  INSERT ls_input_fnames INTO TABLE pt_servicei_fnames.
+  ls_input_fnames-fieldname = 'TIMESTAMP_FROM'.
+  INSERT ls_input_fnames INTO TABLE pt_servicei_fnames.
+  ls_input_fnames-fieldname = 'TIMEZONE_FROM'.
+  INSERT ls_input_fnames INTO TABLE pt_servicei_fnames.
+  ls_input_fnames-fieldname = 'MODE'.
+  INSERT ls_input_fnames INTO TABLE pt_servicei_fnames.
+  ls_input_fnames-fieldname = 'SERVICE_TYPE'.
+  INSERT ls_input_fnames INTO TABLE pt_servicei_fnames.
+  ls_input_fnames-fieldname = 'VALUATION_TYPE'.
+  INSERT ls_input_fnames INTO TABLE pt_servicei_fnames.
+
+* Partner
+  ls_input_fnames-fieldname = 'KIND_OF_ENTRY'.
+  INSERT ls_input_fnames INTO TABLE pt_partner_fnames.
+  ls_input_fnames-fieldname = 'PARTNER_FCT'.
+  INSERT ls_input_fnames INTO TABLE pt_partner_fnames.
+  ls_input_fnames-fieldname = 'PARTNER_NO'.
+  INSERT ls_input_fnames INTO TABLE pt_partner_fnames.
+  ls_input_fnames-fieldname = 'DISPLAY_TYPE'.
+  INSERT ls_input_fnames INTO TABLE pt_partner_fnames.
+  ls_input_fnames-fieldname = 'NO_TYPE'.
+  INSERT ls_input_fnames INTO TABLE pt_partner_fnames.
+ENDFORM.                    " set_input_fields_cre_conf
+
+
+*&---------------------------------------------------------------------*
+*&      Form  fill_header_data_cre_conf
+*&---------------------------------------------------------------------*
+*& Kopfdaten beim Anlegen der Servicemeldung füllen
+*&---------------------------------------------------------------------*
+FORM fill_header_data_cre_conf USING    ps_adminh             TYPE crmd_orderadm_h
+                                        pv_header_handle      TYPE crmt_handle
+                                        pv_partner            TYPE pernr_d
+                                        pt_orderadminh_fnames TYPE crmt_input_field_names_tab
+                                        pt_partner_fnames     TYPE crmt_input_field_names_tab
+                               CHANGING pt_orderadm_h_out     TYPE crmt_orderadm_h_comt
+                                        pt_input_fields       TYPE crmt_input_field_tab
+                                        pt_doc_flow           TYPE crmt_doc_flow_comt
+                                        pt_partner            TYPE crmt_partner_comt.
+
+  DATA: ls_orderadm_h_out TYPE crmt_orderadm_h_com,
+        ls_input_fields   TYPE crmt_input_field,
+        ls_doc_flow       TYPE crmt_doc_flow_com,
+        ls_doc_link       TYPE crmt_doc_flow_extd,
+        ls_partner        TYPE crmt_partner_com.
+
+* orderadm_h
+  ls_orderadm_h_out-process_type            = 'ZSVC'.                "TNG Servicerückmeldung
+  ls_orderadm_h_out-handle                  = pv_header_handle.
+  ls_orderadm_h_out-mode                    = gc_mode-create.
+  ls_orderadm_h_out-predecessor_process     = ps_adminh-guid.
+  ls_orderadm_h_out-predecessor_object_type = ps_adminh-object_type.
+  ls_orderadm_h_out-description             = ps_adminh-description.
+  INSERT ls_orderadm_h_out INTO TABLE pt_orderadm_h_out.
+
+  ls_input_fields-ref_handle  = pv_header_handle.
+  ls_input_fields-ref_kind    = gc_object_kind-orderadm_h.
+  ls_input_fields-objectname  = gc_object_name-orderadm_h.
+  ls_input_fields-field_names = pt_orderadminh_fnames.
+  INSERT ls_input_fields INTO TABLE pt_input_fields.
+
+* doc flow
+  ls_doc_flow-ref_handle = pv_header_handle.
+  ls_doc_flow-ref_kind   = gc_object_kind-orderadm_h.
+  ls_doc_link-objkey_a   = ps_adminh-guid.
+  ls_doc_link-vona_kind  = gc_vona_kind-copy_update.
+  ls_doc_link-handle_b   = pv_header_handle.
+  ls_doc_link-brel_kind  = gc_brel_kind-header_header.
+  ls_doc_link-brel_mode  = gc_mode-create.
+  ls_doc_link-reltype    = gc_bin_rel_type-predecessor_successor.
+  APPEND ls_doc_link TO ls_doc_flow-doc_link.
+  APPEND ls_doc_flow TO pt_doc_flow.
+
+* Partner
+  ls_partner-ref_handle    = pv_header_handle.
+  ls_partner-ref_kind      = gc_object_kind-orderadm_h.
+  ls_partner-partner_no    = 'ZZ' && pv_partner.
+  ls_partner-display_type  = 'BP'.
+  ls_partner-no_type       = 'BP'.
+  ls_partner-partner_fct   = '00000052'.     "Ausführender Servicemitarbeiter
+  ls_partner-kind_of_entry = gc_object_kind-extension_h.
+  INSERT ls_partner INTO TABLE pt_partner.
+
+  ls_input_fields-ref_handle  = pv_header_handle.
+  ls_input_fields-ref_kind    = gc_object_kind-orderadm_h.
+  ls_input_fields-logical_key = '0000'.
+  ls_input_fields-objectname  = gc_object_name-partner.
+  ls_input_fields-field_names = pt_partner_fnames.
+  INSERT ls_input_fields INTO TABLE pt_input_fields.
+ENDFORM.                    " fill_header_data_cre_conf
+
+
+*&---------------------------------------------------------------------*
+*&      Form  fill_item_data_cre_conf
+*&---------------------------------------------------------------------*
+*& Positionsdaten beim Anlegen der Servicemeldung füllen
+*&---------------------------------------------------------------------*
+FORM fill_item_data_cre_conf USING    pt_serv_i             TYPE gty_serv_i_tab
+                                      pv_header_handle      TYPE crmt_handle
+                                      pt_orderadmini_fnames TYPE crmt_input_field_names_tab
+                                      pt_schedlini_fnames   TYPE crmt_input_field_names_tab
+                                      pt_servicei_fnames    TYPE crmt_input_field_names_tab
+                                      pv_partner            TYPE pernr_d
+                             CHANGING pt_orderadm_i_out     TYPE crmt_orderadm_i_comt
+                                      pt_doc_flow           TYPE crmt_doc_flow_comt
+                                      pt_input_fields       TYPE crmt_input_field_tab
+                                      pt_schedlin_i_out     TYPE crmt_schedlin_i_comt
+                                      pt_service_i_out      TYPE crmt_service_i_comt.
+
+  DATA: lv_item_handle    TYPE crmt_handle,
+        ls_input_fields   TYPE crmt_input_field,
+        ls_orderadm_i_out TYPE crmt_orderadm_i_com,
+        ls_doc_flow       TYPE crmt_doc_flow_com,
+        ls_doc_link       TYPE crmt_doc_flow_extd,
+        ls_schedlin_e_out TYPE crmt_schedlin_extd,
+        ls_schedlin_i_out TYPE crmt_schedlin_i_com,
+        ls_service_i_out  TYPE crmt_service_i_com.
+
+  FIELD-SYMBOLS: <fs_serv_i> TYPE gty_serv_i.
+
+  lv_item_handle = pv_header_handle.
+
+  LOOP AT pt_serv_i ASSIGNING <fs_serv_i>.
+    lv_item_handle = lv_item_handle + 1.
+
+    ls_orderadm_i_out-header_handle = pv_header_handle.
+    ls_orderadm_i_out-handle        = lv_item_handle.
+    ls_orderadm_i_out-mode          = gc_mode-create.
+    ls_orderadm_i_out-ordered_prod  = <fs_serv_i>-ordered_prod .
+
+    IF <fs_serv_i>-itm_type = 'ZKT1'.
+      ls_orderadm_i_out-itm_type = 'YKT1'.
+    ELSEIF <fs_serv_i>-itm_type = 'ZKT2'.
+      ls_orderadm_i_out-itm_type = 'YKT2'.
+    ENDIF.
+
+    INSERT ls_orderadm_i_out INTO TABLE pt_orderadm_i_out.
+
+*   doc flow data
+    ls_doc_flow-ref_handle = lv_item_handle.
+    ls_doc_flow-ref_kind   = gc_object_kind-orderadm_i.
+    ls_doc_link-objkey_a   = <fs_serv_i>-item_guid.
+    ls_doc_link-vona_kind  = gc_vona_kind-copy_update.
+    ls_doc_link-handle_b   = lv_item_handle.
+    ls_doc_link-brel_kind  = gc_brel_kind-item_item.
+    ls_doc_link-brel_mode  = gc_mode-create.
+    ls_doc_link-reltype    = gc_bin_rel_type-predecessor_successor.
+    CLEAR ls_doc_flow-doc_link.
+    APPEND ls_doc_link TO ls_doc_flow-doc_link.
+    APPEND ls_doc_flow TO pt_doc_flow.
+
+    ls_input_fields-ref_handle      = lv_item_handle.
+    ls_input_fields-ref_kind        = gc_object_kind-orderadm_i.
+    ls_input_fields-objectname      = gc_object_name-orderadm_i.
+    ls_input_fields-field_names     = pt_orderadmini_fnames.
+    INSERT ls_input_fields INTO TABLE pt_input_fields.
+
+*   schedlin_i
+    ls_schedlin_e_out-quantity      = <fs_serv_i>-catshours_r.
+    INSERT ls_schedlin_e_out INTO TABLE ls_schedlin_i_out-schedlines.
+
+    ls_schedlin_i_out-ref_handle    = lv_item_handle.
+    ls_schedlin_i_out-mode          = gc_mode-create.
+    INSERT ls_schedlin_i_out INTO TABLE pt_schedlin_i_out.
+
+    ls_input_fields-ref_handle      = lv_item_handle.
+    ls_input_fields-ref_kind        = gc_object_kind-orderadm_i.
+    ls_input_fields-objectname      = gc_object_name-schedlin.
+    ls_input_fields-field_names     = pt_schedlini_fnames.
+    INSERT ls_input_fields INTO TABLE pt_input_fields.
+
+*   service_i
+    ls_service_i_out-ref_handle     = lv_item_handle.
+    ls_service_i_out-srv_conf_time  = <fs_serv_i>-catshours.
+    ls_service_i_out-srv_conf_tunit = <fs_serv_i>-unit.
+    ls_service_i_out-timezone_from  = 'UTC'.
+    ls_service_i_out-mode           = gc_mode-create.
+
+    ls_service_i_out-service_type   = <fs_serv_i>-service_type.
+
+*   Bewertungsart bestimmen
+    PERFORM det_val_type USING    pv_partner
+                         CHANGING ls_service_i_out.
+
+    INSERT ls_service_i_out INTO TABLE pt_service_i_out.
+
+    ls_input_fields-ref_handle      = lv_item_handle.
+    ls_input_fields-ref_kind        = gc_object_kind-orderadm_i.
+    ls_input_fields-objectname      = gc_object_name-service_i.
+    ls_input_fields-field_names     = pt_servicei_fnames.
+    INSERT ls_input_fields INTO TABLE pt_input_fields.
+
+  ENDLOOP.
+ENDFORM.                    " fill_item_data_cre_conf
+
+
+*&---------------------------------------------------------------------*
+*& Form det_val_type
+*&---------------------------------------------------------------------*
+*& Bewertungsart bestimmen
+*&---------------------------------------------------------- -----------*
+FORM det_val_type  USING    pv_partner       TYPE pernr_d
+                   CHANGING ps_service_i_out TYPE crmt_service_i_com.
+  DATA: lv_ansvh TYPE pa0001-ansvh.
+
+  SELECT SINGLE ansvh FROM pa0001 INTO lv_ansvh
+                      WHERE pernr = pv_partner
+                        AND begda <= sy-datum
+                        AND endda >= sy-datum.
+
+  CASE lv_ansvh.
+    WHEN '00'.
+      ps_service_i_out-valuation_type = 'ING'.          "Ingenieur
+    WHEN '01'.
+      ps_service_i_out-valuation_type = 'TECH'.         "Techniker
+    WHEN '03'.
+      ps_service_i_out-valuation_type = 'VERW'.         "Verwaltungsmitarbeiter
+    WHEN '04'.  " Sonstige Mitarbeiter
+      ps_service_i_out-valuation_type = 'HILF'.         "Sonstige Mitarbeiter
+  ENDCASE.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form set_status_conf
+*&---------------------------------------------------------------------*
+*& Servicerückmeldung auf erledigt setzen
+*&---------------------------------------------------------------------*
+FORM set_status_conf  USING    pt_orderadm_h_out TYPE crmt_orderadm_h_comt
+                      CHANGING pt_mess           TYPE bapiret2_t
+                               pv_return         TYPE xfeld.
+
+  DATA: ls_orderadm_h_out TYPE crmt_orderadm_h_com,
+        lt_status_fnames  TYPE crmt_input_field_names_tab,
+        lt_input_fields   TYPE crmt_input_field_tab,
+        lt_exception      TYPE crmt_exception_t                   ##NEEDED,       "debug
+        lT_STATUS         TYPE crmt_status_comt.
+
+  DATA: lt_guid_to_save TYPE crmt_object_guid_tab,
+        lt_not_saved    TYPE crmt_object_guid_tab.
+
+  DATA: ls_mess TYPE bapiret2.
+
+  DATA: lv_guid      TYPE crms4d_serv_h-header_guid,
+        lv_object_id TYPE crms4d_serv_h-object_id.
+
+  FIELD-SYMBOLS: <fs_guid>      TYPE crmt_object_guid.
+
+  lv_guid = pt_orderadm_h_out[ 1 ]-guid.
+
+  SELECT SINGLE object_id FROM crms4d_serv_h INTO lv_object_id
+                          WHERE header_guid = lv_guid.
+
+  SHIFT lv_object_id LEFT DELETING LEADING '0'.
+
+* Füllen Übergabeparameter für CRM_ORDER_MAINTAIN
+  PERFORM set_input_fields_status_conf CHANGING lt_status_fnames.
+
+  PERFORM fill_header_data_status_conf USING    pt_orderadm_h_out
+                                                lt_status_fnames
+                                       CHANGING lt_input_fields
+                                                lt_status.
+
+* Status stzen
+  CALL FUNCTION 'CRM_ORDER_MAINTAIN'
+    EXPORTING
+      it_status         = lt_status
+    IMPORTING
+      et_exception      = lt_exception
+    CHANGING
+      ct_input_fields   = lt_input_fields
+    EXCEPTIONS
+      error_occurred    = 1
+      document_locked   = 2
+      no_change_allowed = 3
+      no_authority      = 4
+      OTHERS            = 5.
+
+  IF sy-subrc <> 0 OR
+     lt_exception IS NOT INITIAL.
+*   Rückmeldung &1 konnte nicht auf Status 'erledigt' gesetzt werden
+    write_message_11 e 016 lv_object_id.
+*  message e016(zhr_mtt3_set_data).
+
+    RETURN.
+  ENDIF.
+
+* Rückmeldung &1 wurde auf Status 'erledigt' gesetzt
+  write_message_11 s 017 lv_object_id.
+
+  READ TABLE pt_orderadm_h_out INTO ls_orderadm_h_out INDEX 1.
+  INSERT ls_orderadm_h_out-guid INTO TABLE lt_guid_to_save.
+
+  CALL FUNCTION 'CRM_ORDER_SAVE'
+    EXPORTING
+      it_objects_to_save   = lt_guid_to_save
+    IMPORTING
+      et_objects_not_saved = lt_not_saved
+    EXCEPTIONS
+      document_not_saved   = 1
+      OTHERS               = 2.
+
+  IF sy-subrc IS NOT INITIAL.
+    LOOP AT lt_not_saved ASSIGNING <fs_guid>.
+*     Rückmeldung &1 konnte nach Statusänderung nicht gesichert werden
+      write_message_11 e 018 lv_object_id.
+    ENDLOOP.
+  ENDIF.
+
+  COMMIT WORK AND WAIT.
+
+  CALL FUNCTION 'CRM_ORDER_INIT_OW'
+    EXPORTING
+      iv_initialize_whole_buffer = 'X'
+    EXCEPTIONS
+      error_occurred             = 1
+      bad_performance            = 2
+      OTHERS                     = 3.
+
+  IF sy-subrc <> 0.
+*   Implement suitable error handling here
+  ENDIF.
+
+  CALL FUNCTION 'CRM_STATUS_BUFFER_REFRESH'.
+ENDFORM.
